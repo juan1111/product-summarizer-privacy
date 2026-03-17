@@ -18,64 +18,11 @@ export async function fetchReviews(itemId: string) {
   const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
   console.log(`[BG][Lazada][1-star][Debug] start fetchReviews itemId=${itemId}`);
 
-  for (let page = 1; page <= 50; page++) {
-    if (
-      fiveStarReviews.length >= 10 &&
-      fourStarReviews.length >= 10 &&
-      threeStarReviews.length >= 10 &&
-      twoStarReviews.length >= 10 &&
-      oneStarReviews.length >= 10
-    ) {
-      break;
-    }
-
-    const url = `https://my.lazada.com.ph/pdp/review/getReviewList?itemId=${itemId}&pageSize=20&pageNo=${page}`;
-    const data = await fetchWithRetry(url, cookieHeader, itemId);
-    if (!data) break;
-    if (page === 1 && isTemporarilyBlockedPayload(data)) {
-      throw new Error(TEMP_BLOCK_MESSAGE);
-    }
-
-    const model = data?.model;
-    const items = model?.items ?? [];
-    const reviewCountHint = Number(model?.ratings?.reviewCount ?? model?.ratings?.rateCount ?? 0);
-    if (!Array.isArray(items) || items.length === 0) {
-      if (reviewCountHint > 0) temporaryBlockHint++;
-      break;
-    }
-
-    if (page === 1) {
-      totalReviews = Number(model.totalCount ?? model.total ?? 0);
-      rating = Number(model.averageScore ?? model.averageRating ?? 0) || null;
-    }
-
-    for (const raw of items) {
-      const mapped = mapLazadaReview(raw);
-      const key = `${mapped.author}|${mapped.date}|${mapped.body}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      if (mapped.rating === 5 && fiveStarReviews.length < 10) fiveStarReviews.push(mapped);
-      else if (mapped.rating === 4 && fourStarReviews.length < 10) fourStarReviews.push(mapped);
-      else if (mapped.rating === 3 && threeStarReviews.length < 10) threeStarReviews.push(mapped);
-      else if (mapped.rating === 2 && twoStarReviews.length < 10) twoStarReviews.push(mapped);
-      else if (mapped.rating === 1 && oneStarReviews.length < 10) oneStarReviews.push(mapped);
-    }
-
-    if (oneStarReviews.length > 0) {
-      console.log(
-        `[BG][Lazada][1-star][Debug] general page=${page} oneStarCount=${oneStarReviews.length}`,
-      );
-    }
-
-    await sleep(1500 + Math.random() * 2000);
-  }
-
+  // Star-filter-only flow: fetch 5* -> 1* buckets directly.
   temporaryBlockHint += await fillByFilter(itemId, cookieHeader, seen, fiveStarReviews, 5);
   temporaryBlockHint += await fillByFilter(itemId, cookieHeader, seen, fourStarReviews, 4);
   temporaryBlockHint += await fillByFilter(itemId, cookieHeader, seen, threeStarReviews, 3);
   temporaryBlockHint += await fillByFilter(itemId, cookieHeader, seen, twoStarReviews, 2);
-  await seedOneStarPageOne(itemId, cookieHeader, seen, oneStarReviews);
   temporaryBlockHint += await fillByFilter(itemId, cookieHeader, seen, oneStarReviews, 1, true);
 
   console.log(
@@ -95,6 +42,14 @@ export async function fetchReviews(itemId: string) {
     ...twoStarReviews,
     ...oneStarReviews,
   ];
+
+  // "Overall" is based on the combined fetched star buckets.
+  totalReviews = allReviews.length;
+  if (allReviews.length > 0) {
+    const sum = allReviews.reduce((acc, r) => acc + (Number(r?.rating ?? 0) || 0), 0);
+    const avg = sum / allReviews.length;
+    rating = Number.isFinite(avg) ? Number(avg.toFixed(1)) : null;
+  }
 
   if (allReviews.length === 0 && (totalReviews > 0 || temporaryBlockHint > 0)) {
     throw new Error(TEMP_BLOCK_MESSAGE);

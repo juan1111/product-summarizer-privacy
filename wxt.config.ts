@@ -6,8 +6,8 @@ export default defineConfig({
   manifest: ({ browser, manifestVersion, mode, command }) => {
     return {
       manifest_version: 3,
-      name: "PROJECT 2",
-      description: "WXT DESCRIPTION",
+      name: "VeriBuy",
+      description: "A browser extension that summarizes product details and customer reviews from online shopping platforms. It uses a basic sentiment analysis algorithm to identify positive, negative, and neutral feedback and includes simple fraud detection to identify suspicious reviews, helping users make faster and more informed purchasing decisions.",
       version: "1.0.0",
       permissions: ['activeTab', 'scripting', 'storage', 'cookies', 'sidePanel'],
       host_permissions: [

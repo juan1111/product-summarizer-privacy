@@ -6,16 +6,36 @@ const SHOW_REVIEW_COMMENTS = false;
 
 export function ReviewsTab({ result }: { result: ScrapeResult }) {
   const visibleReviews = result.reviews;
-  const reviewTexts = visibleReviews.map((review) => `${review.title ?? ""} ${review.body ?? ""}`.trim());
+  const fiveStarCount = visibleReviews.filter((review) => Number(review.rating) === 5).length;
+  const fourStarCount = visibleReviews.filter((review) => Number(review.rating) === 4).length;
+  const threeStarCount = visibleReviews.filter((review) => Number(review.rating) === 3).length;
+  const twoStarCount = visibleReviews.filter((review) => Number(review.rating) === 2).length;
+  const oneStarCount = visibleReviews.filter((review) => Number(review.rating) === 1).length;
+  const reviewTexts = visibleReviews.map((review) =>
+    `${review.title ?? ""} ${review.body ?? ""}`.trim(),
+  );
   const positiveReviewTexts = visibleReviews
-    .filter((review) => review.sentiment?.label === "positive" || Number(review.rating) >= 4)
+    .filter(
+      (review) =>
+        review.sentiment?.label === "positive" || Number(review.rating) >= 4,
+    )
     .map((review) => `${review.title ?? ""} ${review.body ?? ""}`.trim());
   const negativeReviewTexts = visibleReviews
-    .filter((review) => review.sentiment?.label === "negative" || (Number(review.rating) > 0 && Number(review.rating) <= 2))
+    .filter(
+      (review) =>
+        review.sentiment?.label === "negative" ||
+        (Number(review.rating) > 0 && Number(review.rating) <= 2),
+    )
     .map((review) => `${review.title ?? ""} ${review.body ?? ""}`.trim());
 
-  const proCounts = buildPointCounts(result.aiSummary?.pros ?? [], positiveReviewTexts.length ? positiveReviewTexts : reviewTexts);
-  const conCounts = buildPointCounts(result.aiSummary?.cons ?? [], negativeReviewTexts.length ? negativeReviewTexts : reviewTexts);
+  const proCounts = buildPointCounts(
+    result.aiSummary?.pros ?? [],
+    positiveReviewTexts.length ? positiveReviewTexts : reviewTexts,
+  );
+  const conCounts = buildPointCounts(
+    result.aiSummary?.cons ?? [],
+    negativeReviewTexts.length ? negativeReviewTexts : reviewTexts,
+  );
 
   return (
     <div className="p-4 space-y-3">
@@ -27,11 +47,9 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
           <p className="text-xs text-slate-700 leading-relaxed">
             {extractDisplayReviewSummary(result.aiSummary.reviewSummary)}
           </p>
-          {/* {result.platform === "shopee" && (
-            <p className="text-[10px] text-slate-500">
-              Debug (Shopee): 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3* {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
-            </p>
-          )} */}
+          <p className="text-[10px] text-slate-500">
+            Debug: 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3* {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
+          </p>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-emerald-400 mb-1">
@@ -93,15 +111,15 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
       {visibleReviews.length === 0 || !SHOW_REVIEW_COMMENTS ? (
         <div className="text-center py-8 text-slate-500 text-xs">
           <p className="text-2xl mb-2">Reviews</p>
-          <p className="text-slate-600">
+          {/* <p className="text-slate-600">
             {SHOW_REVIEW_COMMENTS
               ? "No reviews fetched."
               : "Reviews/comments are temporarily hidden."}
-          </p>
+          </p> */}
           {SHOW_REVIEW_COMMENTS && (
             <p className="text-slate-500 mt-1 leading-relaxed">
-              Try scrolling to the reviews section on the product page first, then
-              scrape again. Some reviews require being logged in.
+              Try scrolling to the reviews section on the product page first,
+              then scrape again. Some reviews require being logged in.
             </p>
           )}
         </div>
@@ -183,7 +201,20 @@ function countPointMentions(point: string, reviewTexts: string[]): number {
 
 function extractPointTokens(text: string): string[] {
   const STOP = new Set([
-    "the", "and", "for", "with", "very", "item", "product", "good", "great", "some", "can", "be", "to", "of"
+    "the",
+    "and",
+    "for",
+    "with",
+    "very",
+    "item",
+    "product",
+    "good",
+    "great",
+    "some",
+    "can",
+    "be",
+    "to",
+    "of",
   ]);
   return text
     .split(/\s+/)
@@ -193,14 +224,15 @@ function extractPointTokens(text: string): string[] {
 }
 
 function normalizeToken(token: string): string {
-  let t = String(token ?? "").toLowerCase().trim();
+  let t = String(token ?? "")
+    .toLowerCase()
+    .trim();
   if (!t) return "";
 
   if (t.endsWith("ing") && t.length > 6) t = t.slice(0, -3);
   else if (t.endsWith("ed") && t.length > 5) t = t.slice(0, -2);
   else if (t.endsWith("es") && t.length > 5) t = t.slice(0, -2);
   else if (t.endsWith("s") && t.length > 4) t = t.slice(0, -1);
-
   return t;
 }
 
@@ -229,4 +261,3 @@ function StarSummaryCard({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
