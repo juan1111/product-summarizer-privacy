@@ -12,6 +12,29 @@ export function isShopeeUrl(input: string): boolean {
   return /(?:^https?:\/\/)?(?:[\w-]+\.)?shopee\.ph\//i.test((input ?? '').trim());
 }
 
+export function isShopeeProductUrl(input: string): boolean {
+  const raw = (input ?? '').trim();
+  if (!raw) return false;
+  try {
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const u = new URL(withScheme);
+    if (!/(?:^|\.)shopee\.ph$/i.test(u.hostname)) return false;
+
+    const path = u.pathname || '';
+    if (/-i\.(\d+)\.(\d+)/.test(path)) return true;
+
+    const productMatch = path.match(/\/product\/(\d+)\/(\d+)/i);
+    if (productMatch) return true;
+
+    const itemId = u.searchParams.get('item_id');
+    const shopId = u.searchParams.get('shop_id');
+    if (itemId && shopId && /^\d+$/.test(itemId) && /^\d+$/.test(shopId)) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 export function isLazadaProductUrl(input: string): boolean {
   return /(?:^https?:\/\/)?(?:[\w-]+\.)?lazada\.(?:com\.ph|com)\/products\//i.test(
     (input ?? '').trim(),

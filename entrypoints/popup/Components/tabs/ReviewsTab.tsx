@@ -6,16 +6,29 @@ const SHOW_REVIEW_COMMENTS = false;
 
 export function ReviewsTab({ result }: { result: ScrapeResult }) {
   const visibleReviews = result.reviews;
-  const fiveStarCount = visibleReviews.filter((review) => Number(review.rating) === 5).length;
-  const fourStarCount = visibleReviews.filter((review) => Number(review.rating) === 4).length;
-  const threeStarCount = visibleReviews.filter((review) => Number(review.rating) === 3).length;
-  const twoStarCount = visibleReviews.filter((review) => Number(review.rating) === 2).length;
-  const oneStarCount = visibleReviews.filter((review) => Number(review.rating) === 1).length;
+  const fiveStarCount = visibleReviews.filter(
+    (review) => Number(review.rating) === 5,
+  ).length;
+  const fourStarCount = visibleReviews.filter(
+    (review) => Number(review.rating) === 4,
+  ).length;
+  const threeStarCount = visibleReviews.filter(
+    (review) => Number(review.rating) === 3,
+  ).length;
+  const twoStarCount = visibleReviews.filter(
+    (review) => Number(review.rating) === 2,
+  ).length;
+  const oneStarCount = visibleReviews.filter(
+    (review) => Number(review.rating) === 1,
+  ).length;
   const reviewTexts = visibleReviews.map((review) =>
     `${review.title ?? ""} ${review.body ?? ""}`.trim(),
   );
-  const proCounts = buildPointCounts(result.aiSummary?.pros ?? [], reviewTexts);
-  const conCounts = buildPointCounts(result.aiSummary?.cons ?? [], reviewTexts);
+  const pros = result.aiSummary?.pros ?? [];
+  const cons = result.aiSummary?.cons ?? [];
+  const localCounts = buildProsConsPointCounts(pros, cons, reviewTexts);
+  const proCounts = localCounts.proCounts;
+  const conCounts = localCounts.conCounts;
 
   return (
     <div className="p-4 space-y-3">
@@ -28,7 +41,8 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
             {extractDisplayReviewSummary(result.aiSummary.reviewSummary)}
           </p>
           <p className="text-[10px] text-slate-500">
-            Debug: 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3* {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
+            Debug: 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3*{" "}
+            {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
           </p>
           <p className="text-[10px] text-slate-500">
             Point counts are based on {visibleReviews.length} fetched reviews.
@@ -93,7 +107,7 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
 
       {visibleReviews.length === 0 || !SHOW_REVIEW_COMMENTS ? (
         <div className="text-center py-8 text-slate-500 text-xs">
-          <p className="text-2xl mb-2">Reviews</p>
+          {/* <p className="text-2xl mb-2">Reviews</p> */}
           {/* <p className="text-slate-600">
             {SHOW_REVIEW_COMMENTS
               ? "No reviews fetched."
@@ -154,6 +168,75 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
   );
 }
 
+function buildProsConsPointCounts(
+  pros: string[],
+  cons: string[],
+  reviewTexts: string[],
+): { proCounts: number[]; conCounts: number[] } {
+  const proCounts = pros.map(() => 0);
+  const conCounts = cons.map(() => 0);
+  if (
+    (!pros.length && !cons.length) ||
+    !Array.isArray(reviewTexts) ||
+    reviewTexts.length === 0
+  ) {
+    return { proCounts, conCounts };
+  }
+
+  const points = [
+    ...pros.map((point) => ({ kind: "pro" as const, point })),
+    ...cons.map((point) => ({ kind: "con" as const, point })),
+  ];
+
+  const normalizedPoints = points.map((entry) => {
+    const phrase = normalizePointText(entry.point);
+    return {
+      kind: entry.kind,
+      phrase,
+      tokens: extractPointTokens(phrase),
+    };
+  });
+
+  // One review contributes to at most one point across BOTH pros and cons.
+  for (const rawText of reviewTexts) {
+    const text = normalizePointText(rawText);
+    if (!text) continue;
+
+    const reviewTokenSet = new Set(extractPointTokens(text));
+    let bestIdx = -1;
+    let bestScore = 0;
+
+    for (let i = 0; i < normalizedPoints.length; i++) {
+      const point = normalizedPoints[i];
+      if (!point.phrase || point.tokens.length === 0) continue;
+
+      const score = computePointMatchScore(
+        text,
+        reviewTokenSet,
+        point.phrase,
+        point.tokens,
+      );
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0 && bestScore > 0) {
+      const winner = normalizedPoints[bestIdx];
+      if (winner.kind === "pro") {
+        const proIdx = bestIdx;
+        if (proIdx >= 0 && proIdx < proCounts.length) proCounts[proIdx]++;
+      } else {
+        const conIdx = bestIdx - pros.length;
+        if (conIdx >= 0 && conIdx < conCounts.length) conCounts[conIdx]++;
+      }
+    }
+  }
+
+  return { proCounts, conCounts };
+}
+
 function buildPointCounts(points: string[], reviewTexts: string[]): number[] {
   if (!Array.isArray(points) || points.length === 0) return [];
   if (!Array.isArray(reviewTexts) || reviewTexts.length === 0)
@@ -182,7 +265,12 @@ function buildPointCounts(points: string[], reviewTexts: string[]): number[] {
       const point = normalizedPoints[i];
       if (!point.phrase || point.tokens.length === 0) continue;
 
-      const score = computePointMatchScore(text, reviewTokenSet, point.phrase, point.tokens);
+      const score = computePointMatchScore(
+        text,
+        reviewTokenSet,
+        point.phrase,
+        point.tokens,
+      );
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;

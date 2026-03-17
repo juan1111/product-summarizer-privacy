@@ -18,6 +18,12 @@ export default defineConfig({
         'https://*.shopee.ph/*',
         'https://shopee.ph/*',
       ],
+      web_accessible_resources: [
+        {
+          resources: ['shopee-ratings-sniffer.js'],
+          matches: ['https://*.shopee.ph/*', 'https://shopee.ph/*'],
+        },
+      ],
       icons: {
         16: "icon/16.png",
         24: "icon/24.png",

@@ -117,11 +117,41 @@ function mergeUniqueReviews(...groups: Review[][]): Review[] {
   const unique = new Map<string, Review>();
   for (const list of groups) {
     for (const review of list ?? []) {
-      const key = `${review.author}|${review.date}|${review.body}`;
+      const key = buildShopeeReviewDedupKey(review);
       if (!unique.has(key)) unique.set(key, review);
     }
   }
   return Array.from(unique.values());
+}
+
+function buildShopeeReviewDedupKey(review: Review): string {
+  const author = normalizeSpaces(String(review?.author ?? '')).toLowerCase();
+  const date = normalizeShopeeDateKey(String(review?.date ?? ''));
+  const body = normalizeShopeeBodyKey(String(review?.body ?? ''));
+  return `${author}|${date}|${body}`;
+}
+
+function normalizeShopeeDateKey(input: string): string {
+  const s = normalizeSpaces(String(input ?? ''));
+  if (!s) return '';
+
+  const isoLike = s.match(/\d{4}[-/.]\d{2}[-/.]\d{2}/)?.[0];
+  if (isoLike) return isoLike.replace(/[/.]/g, '-');
+
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return s.toLowerCase();
+}
+
+function normalizeShopeeBodyKey(input: string): string {
+  return normalizeSpaces(String(input ?? ''))
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function countStarReviews(reviews: Review[], star: number): number {
@@ -545,51 +575,8 @@ function installShopeeRatingsSniffer(): void {
 
   const script = document.createElement('script');
   script.id = 'shopee-ratings-sniffer-script';
-  script.textContent = `
-    (() => {
-      if (window.__shopeeRatingsSnifferInstalled) return;
-      window.__shopeeRatingsSnifferInstalled = true;
-      const postPayload = (url, payload) => {
-        try {
-          if (!url || !String(url).includes('/item/get_ratings')) return;
-          window.postMessage({ source: 'shopee-ratings-sniffer', url: String(url), payload }, '*');
-        } catch {}
-      };
-
-      const originalFetch = window.fetch;
-      window.fetch = async (...args) => {
-        const res = await originalFetch(...args);
-        try {
-          const input = args[0];
-          const url = typeof input === 'string' ? input : input?.url;
-          if (url && String(url).includes('/item/get_ratings')) {
-            const clone = res.clone();
-            clone.json().then((json) => postPayload(url, json)).catch(() => {});
-          }
-        } catch {}
-        return res;
-      };
-
-      const open = XMLHttpRequest.prototype.open;
-      const send = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-        this.__ratingsUrl = url;
-        return open.call(this, method, url, ...rest);
-      };
-      XMLHttpRequest.prototype.send = function(...args) {
-        this.addEventListener('load', function() {
-          try {
-            const url = this.__ratingsUrl;
-            if (!url || !String(url).includes('/item/get_ratings')) return;
-            const text = this.responseText;
-            if (!text) return;
-            postPayload(url, JSON.parse(text));
-          } catch {}
-        });
-        return send.apply(this, args);
-      };
-    })();
-  `;
+  script.src = chrome.runtime.getURL('shopee-ratings-sniffer.js');
+  script.async = false;
 
   (document.documentElement || document.head || document.body).appendChild(script);
 }
@@ -647,7 +634,7 @@ async function readShopeeStarCountsFromDom(stars: number[], isCancelled: CancelC
 
   const nodes = Array.from(document.querySelectorAll('button,a,div,span')) as HTMLElement[];
   for (const star of stars) {
-    const re = new RegExp(`^${star}\s*star\b`, 'i');
+    const re = new RegExp(`^${star}\\s*star\\b`, 'i');
     const candidate = nodes.find((el) => re.test(normalizeSpaces(el.textContent || '')));
     const count = extractShopeeStarCount(candidate?.textContent || '');
     if (count !== null) counts.set(star, count);
@@ -660,13 +647,13 @@ function extractShopeeStarCount(label: string): number | null {
   const text = normalizeSpaces(String(label || ''));
   if (!text) return null;
 
-  const paren = text.match(/((d[d,]*))/);
+  const paren = text.match(/\((\d[\d,]*)\)/);
   if (paren?.[1]) {
     const n = Number(paren[1].replace(/,/g, ''));
     return Number.isFinite(n) ? n : null;
   }
 
-  const tail = text.match(/stars*(d[d,]*)$/i);
+  const tail = text.match(/\bstar\b\s*(\d[\d,]*)$/i);
   if (tail?.[1]) {
     const n = Number(tail[1].replace(/,/g, ''));
     return Number.isFinite(n) ? n : null;
@@ -1107,7 +1094,7 @@ function isShopeeMetaLine(line: string): boolean {
 function cleanupShopeeReviews(reviews: Review[]): Review[] {
   if (!Array.isArray(reviews) || reviews.length === 0) return [];
 
-  return reviews
+  const cleaned = reviews
     .map((review) => {
       const author = normalizeSpaces(String(review?.author ?? 'Anonymous')) || 'Anonymous';
       const body = sanitizeShopeeReviewBody(String(review?.body ?? ''), author);
@@ -1123,6 +1110,13 @@ function cleanupShopeeReviews(reviews: Review[]): Review[] {
       if (!hasActualReviewContent(review.body)) return false;
       return true;
     });
+
+  const unique = new Map<string, Review>();
+  for (const review of cleaned) {
+    const key = buildShopeeReviewDedupKey(review);
+    if (!unique.has(key)) unique.set(key, review);
+  }
+  return Array.from(unique.values());
 }
 
 function extractVariantNameFromLines(lines: string[]): string {

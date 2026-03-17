@@ -77,7 +77,8 @@ export default function UrlPage() {
       ensureNotCancelled();
       if (!tab?.id) throw new Error("No active tab found.");
 
-      activeTabIdRef.current = tab.id;
+      let workingTabId = tab.id;
+      activeTabIdRef.current = workingTabId;
       const currentUrl = tab.url ?? "";
       trackedUrl = currentUrl;
       const targetUrl = normalizeInputUrl(url.trim());
@@ -107,10 +108,26 @@ export default function UrlPage() {
         !isSamePage(currentUrl, targetUrl)
       ) {
         setLoadingMsg("Navigating to page...");
-        await chrome.tabs.update(tab.id, { url: targetUrl });
-        await waitForSupportedUrl(tab.id, 15000);
-        await waitForTabComplete(tab.id, 12000);
+        await chrome.tabs.update(workingTabId, { url: targetUrl });
+        await waitForSupportedUrl(workingTabId, 15000);
+        await waitForTabComplete(workingTabId, 12000);
         await new Promise((r) => setTimeout(r, 700));
+        const navTab = await chrome.tabs.get(workingTabId);
+        const navUrl = navTab.url ?? "";
+        const navOk = isLazadaProductUrl(navUrl) || isShopeeUrl(navUrl);
+        if (!navOk && targetIsSupported) {
+          // Some Shopee links may land on blank/error pages in the current tab.
+          // Fallback: open the target URL in a fresh tab and continue there.
+          const fallbackTab = await chrome.tabs.create({ url: targetUrl, active: true });
+          if (!fallbackTab?.id) {
+            throw new Error("Unable to open product link. Please try opening the link manually.");
+          }
+          workingTabId = fallbackTab.id;
+          activeTabIdRef.current = workingTabId;
+          await waitForSupportedUrl(workingTabId, 18000);
+          await waitForTabComplete(workingTabId, 12000);
+          await new Promise((r) => setTimeout(r, 900));
+        }
         trackedUrl = targetUrl;
         ensureNotCancelled();
       } else if (targetUrl && !targetIsSupported) {
@@ -121,7 +138,7 @@ export default function UrlPage() {
         );
       }
 
-      const refreshedTab = await chrome.tabs.get(tab.id);
+      const refreshedTab = await chrome.tabs.get(workingTabId);
       ensureNotCancelled();
       const activeUrl = refreshedTab.url ?? "";
       trackedUrl = activeUrl || trackedUrl;
@@ -148,7 +165,7 @@ export default function UrlPage() {
         changeInfo: any,
         updatedTab: chrome.tabs.Tab,
       ) => {
-        if (updatedTabId !== tab.id) return;
+        if (updatedTabId !== workingTabId) return;
         const nextUrl = changeInfo.url ?? updatedTab?.url ?? "";
         if (!nextUrl) return;
         if (!isSamePage(trackedUrl, nextUrl)) {
@@ -162,7 +179,7 @@ export default function UrlPage() {
       setLoadingMsg("Extracting product data...");
       try {
         const injected = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
+          target: { tabId: workingTabId },
           files: ["content-scripts/content.js"],
         });
         ensureNotCancelled();
@@ -178,13 +195,13 @@ export default function UrlPage() {
       );
 
       console.log("[Popup][Debug] sending message", {
-        tabId: tab.id,
+        tabId: workingTabId,
         platform,
         type: platform === "lazada" ? "SCRAPE_LAZADA" : "SCRAPE_SHOPEE",
         url: activeUrl,
       });
       const response = await sendScrapeMessageWithRetry(
-        tab.id,
+        workingTabId,
         platform === "lazada" ? "SCRAPE_LAZADA" : "SCRAPE_SHOPEE",
       );
       ensureNotCancelled();
@@ -332,6 +349,63 @@ export default function UrlPage() {
       )}
     </div>
   );
+}
+
+async function getPageState(tabId: number): Promise<{ title: string; bodyText: string }> {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        title: String(document.title || ""),
+        bodyText: String(document.body?.innerText || "").slice(0, 1200),
+      }),
+    });
+    const payload = res?.[0]?.result as any;
+    return {
+      title: String(payload?.title ?? ""),
+      bodyText: String(payload?.bodyText ?? ""),
+    };
+  } catch {
+    return { title: "", bodyText: "" };
+  }
+}
+
+function isLikely404Page(input: { title: string; bodyText: string }): boolean {
+  const text = `${input.title} ${input.bodyText}`.toLowerCase();
+  if (!text) return false;
+  return (
+    /\b404\b/.test(text) ||
+    /something is missing/.test(text) ||
+    /back to homepage/.test(text) ||
+    /page not found/.test(text)
+  );
+}
+
+function toCanonicalShopeeProductUrl(input: string): string {
+  const raw = String(input ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    const u = new URL(raw);
+    if (!/(?:^|\.)shopee\.ph$/i.test(u.hostname)) return "";
+
+    const path = u.pathname || "";
+    const byPath = path.match(/-i\.(\d+)\.(\d+)/);
+    if (byPath) return `https://shopee.ph/-i.${byPath[1]}.${byPath[2]}`;
+
+    const byProduct = path.match(/\/product\/(\d+)\/(\d+)/i);
+    if (byProduct) return `https://shopee.ph/-i.${byProduct[1]}.${byProduct[2]}`;
+
+    const itemId = u.searchParams.get("item_id");
+    const shopId = u.searchParams.get("shop_id");
+    if (itemId && shopId && /^\d+$/.test(itemId) && /^\d+$/.test(shopId)) {
+      return `https://shopee.ph/-i.${shopId}.${itemId}`;
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
 }
 
 function HeaderSection({
