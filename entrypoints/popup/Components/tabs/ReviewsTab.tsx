@@ -14,28 +14,8 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
   const reviewTexts = visibleReviews.map((review) =>
     `${review.title ?? ""} ${review.body ?? ""}`.trim(),
   );
-  const positiveReviewTexts = visibleReviews
-    .filter(
-      (review) =>
-        review.sentiment?.label === "positive" || Number(review.rating) >= 4,
-    )
-    .map((review) => `${review.title ?? ""} ${review.body ?? ""}`.trim());
-  const negativeReviewTexts = visibleReviews
-    .filter(
-      (review) =>
-        review.sentiment?.label === "negative" ||
-        (Number(review.rating) > 0 && Number(review.rating) <= 2),
-    )
-    .map((review) => `${review.title ?? ""} ${review.body ?? ""}`.trim());
-
-  const proCounts = buildPointCounts(
-    result.aiSummary?.pros ?? [],
-    positiveReviewTexts.length ? positiveReviewTexts : reviewTexts,
-  );
-  const conCounts = buildPointCounts(
-    result.aiSummary?.cons ?? [],
-    negativeReviewTexts.length ? negativeReviewTexts : reviewTexts,
-  );
+  const proCounts = buildPointCounts(result.aiSummary?.pros ?? [], reviewTexts);
+  const conCounts = buildPointCounts(result.aiSummary?.cons ?? [], reviewTexts);
 
   return (
     <div className="p-4 space-y-3">
@@ -49,6 +29,9 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
           </p>
           <p className="text-[10px] text-slate-500">
             Debug: 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3* {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
+          </p>
+          <p className="text-[10px] text-slate-500">
+            Point counts are based on {visibleReviews.length} fetched reviews.
           </p>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -172,31 +155,63 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
 }
 
 function buildPointCounts(points: string[], reviewTexts: string[]): number[] {
-  return points.map((point) => countPointMentions(point, reviewTexts));
-}
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (!Array.isArray(reviewTexts) || reviewTexts.length === 0)
+    return points.map(() => 0);
 
-function countPointMentions(point: string, reviewTexts: string[]): number {
-  const phrase = normalizePointText(point);
-  if (!phrase) return 0;
+  const normalizedPoints = points.map((point) => {
+    const phrase = normalizePointText(point);
+    return {
+      phrase,
+      tokens: extractPointTokens(phrase),
+    };
+  });
 
-  const phraseTokens = extractPointTokens(phrase);
-  if (phraseTokens.length === 0) return 0;
+  const counts = points.map(() => 0);
 
-  return reviewTexts.reduce((count, rawText) => {
+  // One review contributes to at most one point.
+  for (const rawText of reviewTexts) {
     const text = normalizePointText(rawText);
-    if (!text) return count;
-
-    if (text.includes(phrase)) return count + 1;
+    if (!text) continue;
 
     const reviewTokenSet = new Set(extractPointTokens(text));
-    const hits = phraseTokens.reduce((sum, token) => {
-      if (reviewTokenSet.has(token)) return sum + 1;
-      return sum;
-    }, 0);
+    let bestIdx = -1;
+    let bestScore = 0;
 
-    const minHits = phraseTokens.length >= 4 ? 2 : 1;
-    return hits >= minHits ? count + 1 : count;
+    for (let i = 0; i < normalizedPoints.length; i++) {
+      const point = normalizedPoints[i];
+      if (!point.phrase || point.tokens.length === 0) continue;
+
+      const score = computePointMatchScore(text, reviewTokenSet, point.phrase, point.tokens);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0 && bestScore > 0) counts[bestIdx]++;
+  }
+
+  return counts;
+}
+
+function computePointMatchScore(
+  text: string,
+  reviewTokenSet: Set<string>,
+  phrase: string,
+  phraseTokens: string[],
+): number {
+  if (!text || !phrase || phraseTokens.length === 0) return 0;
+  if (text.includes(phrase)) return 100 + phraseTokens.length;
+
+  const hits = phraseTokens.reduce((sum, token) => {
+    if (reviewTokenSet.has(token)) return sum + 1;
+    return sum;
   }, 0);
+
+  const minHits = phraseTokens.length >= 4 ? 2 : 1;
+  if (hits < minHits) return 0;
+  return hits;
 }
 
 function extractPointTokens(text: string): string[] {
@@ -245,8 +260,9 @@ function normalizePointText(text: string): string {
 }
 
 function formatCount(count: number): string {
-  if (!Number.isFinite(count) || count <= 0) return "";
-  return `(${count})`;
+  // Show only repeated points (2+ mentions).
+  if (!Number.isFinite(count) || count <= 1) return "";
+  return `(${count} reviews)`;
 }
 
 function StarSummaryCard({ label, value }: { label: string; value: string }) {
