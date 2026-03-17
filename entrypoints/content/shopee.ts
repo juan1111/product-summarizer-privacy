@@ -84,6 +84,7 @@ async function fetchShopeeJsonWithRetry(url: string, attempts: number, isCancell
 async function collectShopeeReviews(ctx: ShopeeReviewContext, isCancelled: CancelCheck): Promise<Review[]> {
   const targetCount = 10;
   const stars = [5, 4, 3, 2, 1];
+  const perStarBudgetMs = 18000;
 
   throwIfCancelled(isCancelled);
   const localReviews = mapShopeeReviews(extractShopeeRatingsArray(ctx.ratingsJson));
@@ -95,18 +96,24 @@ async function collectShopeeReviews(ctx: ShopeeReviewContext, isCancelled: Cance
   for (const star of stars) {
     if (countStarReviews(merged, star) >= targetCount) continue;
     if (starCounts.get(star) === 0) continue;
+    const starStartedAt = Date.now();
 
-    const captured = await captureShopeeReviewsFromPageRequests(
-      ctx.shopId,
-      ctx.itemId,
-      star,
-      isCancelled,
-    );
-    if (captured.length > 0) merged = mergeUniqueReviews(merged, captured);
+    // Fast path first: extract directly from visible DOM/pagination.
+    const domReviews = await extractShopeeReviewsFromDom(star, isCancelled);
+    if (domReviews.length > 0) merged = mergeUniqueReviews(merged, domReviews);
 
-    if (countStarReviews(merged, star) < targetCount) {
-      const domReviews = await extractShopeeReviewsFromDom(star, isCancelled);
-      if (domReviews.length > 0) merged = mergeUniqueReviews(merged, domReviews);
+    if (
+      countStarReviews(merged, star) < targetCount &&
+      Date.now() - starStartedAt < perStarBudgetMs
+    ) {
+      // Fallback path: sniff page requests, but keep this wait short.
+      const captured = await captureShopeeReviewsFromPageRequests(
+        ctx.shopId,
+        ctx.itemId,
+        star,
+        isCancelled,
+      );
+      if (captured.length > 0) merged = mergeUniqueReviews(merged, captured);
     }
   }
 
@@ -557,10 +564,11 @@ async function captureShopeeReviewsFromPageRequests(shopId: string, itemId: stri
   try {
     await triggerShopeeReviewSection(isCancelled);
     await selectShopeeStarFilter(star, isCancelled);
+    const waitWindowMs = 2500;
     const start = Date.now();
-    while (Date.now() - start < 9000) {
+    while (Date.now() - start < waitWindowMs) {
       throwIfCancelled(isCancelled);
-      if (collected.length > 0) break;
+      if (collected.length >= 5) break;
       await sleep(300);
     }
   } finally {
@@ -607,10 +615,10 @@ async function triggerShopeeReviewSection(isCancelled: CancelCheck): Promise<voi
   throwIfCancelled(isCancelled);
 }
 
-async function selectShopeeStarFilter(star: number, isCancelled: CancelCheck): Promise<void> {
+async function selectShopeeStarFilter(star: number, isCancelled: CancelCheck): Promise<boolean> {
   throwIfCancelled(isCancelled);
   const nodes = Array.from(document.querySelectorAll('button,a,div,span')) as HTMLElement[];
-  const target = nodes.find((el) => {
+  const starNodes = nodes.filter((el) => {
     const text = normalizeSpaces(el.textContent || '');
     if (!text) return false;
     const re = new RegExp(`^${star}\\s*star`, 'i');
@@ -618,11 +626,31 @@ async function selectShopeeStarFilter(star: number, isCancelled: CancelCheck): P
     const cls = (el.className || '').toString().toLowerCase();
     return !cls.includes('disabled');
   });
+  if (starNodes.length === 0) return false;
 
-  if (target) {
-    dispatchMouseClick(target);
-    await sleep(800);
-  }
+  const isActive = (el: HTMLElement): boolean => {
+    const cls = (el.className || '').toString().toLowerCase();
+    return (
+      cls.includes('active') ||
+      cls.includes('selected') ||
+      el.getAttribute('aria-selected') === 'true' ||
+      el.getAttribute('aria-current') === 'true'
+    );
+  };
+
+  const activeNow = starNodes.find((el) => isActive(el));
+  if (activeNow) return true;
+
+  const target = starNodes[0];
+  dispatchMouseClick(target);
+  await sleep(500);
+  throwIfCancelled(isCancelled);
+
+  const refreshed = Array.from(document.querySelectorAll('button,a,div,span')) as HTMLElement[];
+  const refreshedStarNodes = refreshed.filter((el) =>
+    new RegExp(`^${star}\\s*star`, 'i').test(normalizeSpaces(el.textContent || '')),
+  );
+  return refreshedStarNodes.some((el) => isActive(el));
 }
 
 async function readShopeeStarCountsFromDom(stars: number[], isCancelled: CancelCheck): Promise<Map<number, number | null>> {
@@ -679,15 +707,24 @@ function filterShopeeRatingsByItem(ratings: any[], itemId: string, shopId: strin
 
 async function extractShopeeReviewsFromDom(star: number, isCancelled: CancelCheck): Promise<Review[]> {
   await triggerShopeeReviewSection(isCancelled);
-  await selectShopeeStarFilter(star, isCancelled);
+  const didSelectStar = await selectShopeeStarFilter(star, isCancelled);
   throwIfCancelled(isCancelled);
+  if (!didSelectStar) return [];
 
   const all = new Map<string, Review>();
+  const startedAt = Date.now();
+  const perStarTimeoutMs = 22000;
+  const maxPages = 25;
+  let noGrowthLoops = 0;
   let stalePageHits = 0;
   let page = 1;
 
   while (true) {
     throwIfCancelled(isCancelled);
+    if (Date.now() - startedAt >= perStarTimeoutMs) break;
+    if (page > maxPages) break;
+
+    const sizeBefore = all.size;
     for (let round = 0; round < 2; round++) {
       throwIfCancelled(isCancelled);
       for (const review of collectShopeeReviewsFromVisibleDom(star)) {
@@ -697,6 +734,8 @@ async function extractShopeeReviewsFromDom(star: number, isCancelled: CancelChec
       window.scrollBy({ top: 900, behavior: 'auto' });
       await sleep(350);
     }
+    noGrowthLoops = all.size > sizeBefore ? 0 : noGrowthLoops + 1;
+    if (noGrowthLoops >= 3) break;
 
     if (countStarReviews(Array.from(all.values()), star) >= 10) break;
     if (!hasShopeeNextPage()) break;

@@ -394,9 +394,11 @@ function safeParseGeminiObject(raw: string): any {
   }
 
   const fallbackText = stripCodeFence(String(raw ?? '').trim());
+  const extractedDescription = extractJsonStringField(fallbackText, 'descriptionSummary');
+  const extractedReview = extractJsonStringField(fallbackText, 'reviewSummary');
   return {
-    descriptionSummary: 'No AI summary generated.',
-    reviewSummary: fallbackText.slice(0, 500),
+    descriptionSummary: extractedDescription || 'No AI summary generated.',
+    reviewSummary: extractedReview || 'No review summary generated.',
     pros: [],
     cons: [],
     star5Summary: 'Limited review evidence',
@@ -411,6 +413,24 @@ function safeParseGeminiObject(raw: string): any {
     productSignals: [],
     storeSignals: [],
   };
+}
+
+function extractJsonStringField(text: string, field: string): string {
+  const source = String(text ?? '');
+  if (!source || !field) return '';
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`"${escapedField}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, 'i');
+  const match = source.match(re);
+  if (!match?.[1]) return '';
+
+  // Unescape minimal JSON string escapes so the UI shows readable text.
+  const unescaped = match[1]
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, ' ')
+    .replace(/\\r/g, ' ')
+    .replace(/\\t/g, ' ')
+    .replace(/\\\\/g, '\\');
+  return unescaped.replace(/\s+/g, ' ').trim();
 }
 
 function buildJsonCandidates(raw: string): string[] {

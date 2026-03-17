@@ -40,13 +40,13 @@ export function ReviewsTab({ result }: { result: ScrapeResult }) {
           <p className="text-xs text-slate-700 leading-relaxed">
             {extractDisplayReviewSummary(result.aiSummary.reviewSummary)}
           </p>
-          <p className="text-[10px] text-slate-500">
+          {/* <p className="text-[10px] text-slate-500">
             Debug: 5* {fiveStarCount}/10 | 4* {fourStarCount}/10 | 3*{" "}
             {threeStarCount}/10 | 2* {twoStarCount}/10 | 1* {oneStarCount}/10
-          </p>
-          <p className="text-[10px] text-slate-500">
+          </p> */}
+          {/* <p className="text-[10px] text-slate-500">
             Point counts are based on {visibleReviews.length} fetched reviews.
-          </p>
+          </p> */}
           <div className="grid grid-cols-2 gap-2">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-emerald-400 mb-1">

@@ -106,8 +106,8 @@ export function extractDisplayReviewSummary(input: string): string {
     const reviewOnly = String(obj?.reviewSummary ?? '').trim();
     if (reviewOnly) return reviewOnly;
   } catch {
-    return text;
+    return 'No review summary generated.';
   }
 
-  return text;
+  return 'No review summary generated.';
 }
